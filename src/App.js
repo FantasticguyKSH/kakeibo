@@ -88,7 +88,7 @@ export default function App() {
     dayNum:{fontSize:12,fontWeight:"normal",width:22,height:22,display:"flex",alignItems:"center",justifyContent:"center",borderRadius:"50%",marginBottom:1},
     amtInc:{fontSize:10,color:"#3d8fe0",textAlign:"right",lineHeight:1.5},
     amtExp:{fontSize:10,color:"#e05555",textAlign:"right",lineHeight:1.5},
-    fab:{position:"fixed",bottom:72,right:"calc(50% - 228px)",width:52,height:52,borderRadius:"50%",background:"#e05555",border:"none",color:"#fff",fontSize:26,cursor:"pointer",boxShadow:"0 4px 14px rgba(224,85,85,.45)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:50},
+    fab:{position:"fixed",bottom:80,right:20,width:52,height:52,borderRadius:"50%",background:"#e05555",border:"none",color:"#fff",fontSize:26,cursor:"pointer",boxShadow:"0 4px 14px rgba(224,85,85,.45)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:50},
     bottomNav:{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:480,background:"#fff",borderTop:"1px solid #f0f0f0",display:"flex",zIndex:100},
     navTabBtn:{flex:1,background:"none",border:"none",cursor:"pointer",padding:"8px 0 6px",display:"flex",flexDirection:"column",alignItems:"center",gap:2,fontSize:11},
   };
