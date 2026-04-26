@@ -22,14 +22,12 @@ const DAYS = ["일","월","화","수","목","금","토"];
 const fmt = n => Math.abs(n).toLocaleString("ko-KR");
 
 function useStorage(key, def) {
-  const [val, setVal] = useState(def);
-  const [loaded, setLoaded] = useState(false);
+  const [val, setVal] = useState(()=>{
+    try { const s=localStorage.getItem(key); return s?JSON.parse(s):def; } catch{ return def; }
+  });
   useEffect(() => {
-    window.storage.get(key).then(r => { if(r) setVal(JSON.parse(r.value)); }).catch(()=>{}).finally(()=>setLoaded(true));
-  }, [key]);
-  useEffect(() => {
-    if(loaded) window.storage.set(key, JSON.stringify(val)).catch(()=>{});
-  }, [val, loaded, key]);
+    try { localStorage.setItem(key, JSON.stringify(val)); } catch{}
+  }, [val, key]);
   return [val, setVal];
 }
 
