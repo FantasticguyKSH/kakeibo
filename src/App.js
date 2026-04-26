@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
-import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend } from "recharts";
+import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
 
 const DEF_EXP_CATS = [
   {id:"food",name:"식비",emoji:"🍜"},{id:"transport",name:"교통/차량",emoji:"🚕"},
@@ -26,10 +26,10 @@ function useStorage(key, def) {
   const [loaded, setLoaded] = useState(false);
   useEffect(() => {
     window.storage.get(key).then(r => { if(r) setVal(JSON.parse(r.value)); }).catch(()=>{}).finally(()=>setLoaded(true));
-  }, []);
+  }, [key]);
   useEffect(() => {
     if(loaded) window.storage.set(key, JSON.stringify(val)).catch(()=>{});
-  }, [val, loaded]);
+  }, [val, loaded, key]);
   return [val, setVal];
 }
 
@@ -159,7 +159,6 @@ function StatsTab({y,m,prev,next,totalInc,totalExp,expByCat,monthTxs,allCats,s})
   const isExp=view==="expense";
   const data=isExp?expByCat:incByCat;
   const total=isExp?totalExp:totalInc;
-  const accentColor=isExp?"#e05555":"#3d8fe0";
   const empty=isExp?"이번 달 지출 내역이 없어요":"이번 달 수입 내역이 없어요";
 
   return (
