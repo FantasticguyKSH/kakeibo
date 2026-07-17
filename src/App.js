@@ -21,6 +21,20 @@ const PIE_COLORS = ["#FF6B6B","#FF8E53","#FFC300","#4ECDC4","#45B7D1","#96CEB4",
 const DAYS = ["일","월","화","수","목","금","토"];
 const fmt = n => Math.abs(n).toLocaleString("ko-KR");
 
+function toDateInputValue(date) {
+  return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,"0")}-${String(date.getDate()).padStart(2,"0")}`;
+}
+
+function fromDateInputValue(value) {
+  const [year,month,day] = value.split("-").map(Number);
+  return new Date(year,month-1,day,12,0,0,0);
+}
+
+function validDate(value,fallback=new Date()) {
+  const date=value instanceof Date?value:new Date(value);
+  return Number.isNaN(date.getTime())?fallback:date;
+}
+
 function useStorage(key, def) {
   const [val, setVal] = useState(()=>{
     try { const s=localStorage.getItem(key); return s?JSON.parse(s):def; } catch{ return def; }
@@ -65,6 +79,7 @@ export default function App() {
   const next = ()=>setCur(({y,m})=>m===11?{y:y+1,m:0}:{y,m:m+1});
 
   const addTx = tx => setTxs(p=>[...p,tx]);
+  const updateTx = tx => setTxs(p=>p.map(t=>t.id===tx.id?tx:t));
   const delTx = id => setTxs(p=>p.filter(t=>t.id!==id));
 
   const bal = totalInc - totalExp;
@@ -140,8 +155,27 @@ export default function App() {
         ))}
       </div>
 
-      {modal && <TxModal onClose={()=>setModal(null)} onSave={tx=>{addTx(tx);setModal(null);}} onContinue={tx=>{addTx(tx);}} expCats={expCats} incCats={incCats} assets={assets} initDate={modal.day?new Date(y,m,modal.day):new Date()} />}
-      {dayModal && <DayModal day={dayModal} y={y} m={m} txs={txs.filter(t=>{const d=new Date(t.date);return d.getFullYear()===y&&d.getMonth()===m&&d.getDate()===dayModal;})} onClose={()=>setDayModal(null)} onDel={delTx} allCats={[...expCats,...incCats]} onAdd={()=>{setModal({day:dayModal});setDayModal(null);}} />}
+      {modal && <TxModal
+        onClose={()=>setModal(null)}
+        onSave={tx=>{modal.tx?updateTx(tx):addTx(tx);setModal(null);}}
+        onContinue={modal.tx?null:tx=>addTx(tx)}
+        expCats={expCats}
+        incCats={incCats}
+        assets={assets}
+        initialTx={modal.tx}
+        initDate={modal.tx?validDate(modal.tx.date):modal.day?new Date(y,m,modal.day,12):new Date()}
+      />}
+      {dayModal && <DayModal
+        day={dayModal}
+        y={y}
+        m={m}
+        txs={txs.filter(t=>{const d=new Date(t.date);return d.getFullYear()===y&&d.getMonth()===m&&d.getDate()===dayModal;})}
+        onClose={()=>setDayModal(null)}
+        onDel={delTx}
+        onEdit={tx=>{setModal({day:null,tx});setDayModal(null);}}
+        allCats={[...expCats,...incCats]}
+        onAdd={()=>{setModal({day:dayModal,tx:null});setDayModal(null);}}
+      />}
     </div>
   );
 }
@@ -267,74 +301,99 @@ function MoreTab({expCats,setExpCats,incCats,setIncCats,assets,setAssets}) {
   );
 }
 
-function TxModal({onClose,onSave,onContinue,expCats,incCats,assets,initDate}) {
-  const [type,setType]=useState("expense");
-  const [date]=useState(initDate||new Date());
-  const [amtStr,setAmtStr]=useState("");
-  const [cat,setCat]=useState("");
-  const [asset,setAsset]=useState("");
-  const [memo,setMemo]=useState("");
-  const [showCat,setShowCat]=useState(false);
-  const cats=type==="expense"?expCats:incCats;
-  const amt=parseInt(amtStr||"0",10);
-  const ds=`${String(date.getFullYear()).slice(2)}/${String(date.getMonth()+1).padStart(2,"0")}/${String(date.getDate()).padStart(2,"0")} (${DAYS[date.getDay()]})`;
+function TxModal({ onClose, onSave, onContinue, expCats, incCats, assets, initDate, initialTx }) {
+  const isEdit = Boolean(initialTx);
+  const [type, setType] = useState(initialTx?.type || "expense");
+  const [date, setDate] = useState(() => validDate(initialTx?.date, initDate || new Date()));
+  const [amtStr, setAmtStr] = useState(initialTx?.amount ? String(initialTx.amount) : "");
+  const [cat, setCat] = useState(initialTx?.category || "");
+  const [asset, setAsset] = useState(initialTx?.asset || "");
+  const [memo, setMemo] = useState(initialTx?.memo || "");
+  const [showCat, setShowCat] = useState(false);
+  const cats = type === "expense" ? expCats : incCats;
+  const amt = parseInt(amtStr || "0", 10);
+  const accent = type === "income" ? "#3d8fe0" : type === "expense" ? "#e05555" : "#888";
 
-  const numKey=k=>{
-    if(k==="del")setAmtStr(p=>p.slice(0,-1));
-    else if(k==="00")setAmtStr(p=>p?p+"00":"");
-    else setAmtStr(p=>p+k);
+  const numKey = k => {
+    if (k === "del") setAmtStr(p => p.slice(0, -1));
+    else if (k === "00") setAmtStr(p => p ? `${p}00` : "");
+    else setAmtStr(p => `${p}${k}`);
   };
 
-  const build=()=>({id:Date.now().toString()+Math.random(),type,date:date.toISOString(),amount:amt,category:cat,asset,memo});
-  const save=()=>{if(!amt)return;onSave(build());};
-  const cont=()=>{if(!amt)return;onContinue(build());setAmtStr("");setCat("");setMemo("");};
+  const build = () => ({
+    ...(initialTx || {}),
+    id: initialTx?.id || `${Date.now()}${Math.random()}`,
+    type,
+    date: date.toISOString(),
+    amount: amt,
+    category: type === "transfer" ? "" : cat,
+    asset,
+    memo,
+  });
+  const save = () => {
+    if (!amt) return;
+    onSave(build());
+  };
+  const cont = () => {
+    if (!amt || !onContinue) return;
+    onContinue(build());
+    setAmtStr("");
+    setCat("");
+    setMemo("");
+  };
 
-  const ms={
-    overlay:{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:200,display:"flex",flexDirection:"column",justifyContent:"flex-end"},
-    sheet:{background:"#fff",borderRadius:"20px 20px 0 0",maxHeight:"92vh",overflowY:"auto"},
-    tabRow:{display:"flex",borderBottom:"1px solid #f0f0f0"},
-    tabBtn:(t)=>({flex:1,padding:"14px 0",border:"none",background:"none",cursor:"pointer",fontSize:15,fontWeight:type===t?"bold":"normal",color:type===t?(t==="income"?"#3d8fe0":t==="expense"?"#e05555":"#888"):"#ccc",borderBottom:type===t?`2px solid ${t==="income"?"#3d8fe0":t==="expense"?"#e05555":"#888"}`:"2px solid transparent"}),
-    row:{display:"flex",alignItems:"center",padding:"14px 20px",borderBottom:"1px solid #f5f5f5"},
-    lbl:{color:"#999",fontSize:14,width:44,flexShrink:0},
-    numpad:{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,padding:"10px 16px 6px"},
-    numBtn:(k)=>({padding:"13px 0",border:"none",borderRadius:10,background:k==="del"?"#f0f0f0":"#f8f8f8",fontSize:k==="del"?20:18,cursor:"pointer",fontWeight:"500",color:"#333"}),
+  const ms = {
+    overlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 200, display: "flex", flexDirection: "column", justifyContent: "flex-end" },
+    sheet: { background: "#fff", borderRadius: "20px 20px 0 0", maxHeight: "92vh", overflowY: "auto" },
+    tabRow: { display: "flex", borderBottom: "1px solid #f0f0f0" },
+    tabBtn: t => ({ flex: 1, padding: "14px 0", border: "none", background: "none", cursor: "pointer", fontSize: 15, fontWeight: type === t ? "bold" : "normal", color: type === t ? (t === "income" ? "#3d8fe0" : t === "expense" ? "#e05555" : "#888") : "#ccc", borderBottom: type === t ? `2px solid ${t === "income" ? "#3d8fe0" : t === "expense" ? "#e05555" : "#888"}` : "2px solid transparent" }),
+    row: { display: "flex", alignItems: "center", padding: "14px 20px", borderBottom: "1px solid #f5f5f5" },
+    lbl: { color: "#999", fontSize: 14, width: 44, flexShrink: 0 },
+    numpad: { display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, padding: "10px 16px 6px" },
+    numBtn: k => ({ padding: "13px 0", border: "none", borderRadius: 10, background: k === "del" ? "#f0f0f0" : "#f8f8f8", fontSize: k === "del" ? 20 : 18, cursor: "pointer", fontWeight: "500", color: "#333" }),
   };
 
   return (
-    <div style={ms.overlay} onClick={e=>e.target===e.currentTarget&&onClose()}>
+    <div style={ms.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
       <div style={ms.sheet}>
-        <div style={{display:"flex",justifyContent:"flex-end",padding:"10px 16px 0"}}><button onClick={onClose} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:"#aaa"}}>✕</button></div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px 2px" }}>
+          <strong style={{ fontSize: 16, color: "#333" }}>{isEdit ? "내역 수정" : "내역 추가"}</strong>
+          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#aaa" }}>✕</button>
+        </div>
         <div style={ms.tabRow}>
-          {["income","expense","transfer"].map(t=>(
-            <button key={t} style={ms.tabBtn(t)} onClick={()=>{setType(t);setCat("");}}>
-              {t==="income"?"수입":t==="expense"?"지출":"이체"}
+          {["income", "expense", "transfer"].map(t => (
+            <button key={t} style={ms.tabBtn(t)} onClick={() => { setType(t); setCat(""); setShowCat(false); }}>
+              {t === "income" ? "수입" : t === "expense" ? "지출" : "이체"}
             </button>
           ))}
         </div>
-        <div style={ms.row}><span style={ms.lbl}>날짜</span><span style={{fontSize:14,color:"#333"}}>{ds}</span></div>
-        <div style={ms.row}><span style={ms.lbl}>금액</span><span style={{fontSize:22,fontWeight:"bold",color:amt>0?(type==="income"?"#3d8fe0":"#e05555"):"#ccc"}}>{amt>0?fmt(amt)+"원":"0원"}</span></div>
-        {type!=="transfer"&&(
-          <div style={{...ms.row,cursor:"pointer",flexWrap:"wrap",gap:8}} onClick={()=>setShowCat(p=>!p)}>
+        <div style={ms.row}>
+          <label htmlFor="tx-date" style={ms.lbl}>날짜</label>
+          <input id="tx-date" aria-label="날짜" type="date" value={toDateInputValue(date)} onChange={e => e.target.value && setDate(fromDateInputValue(e.target.value))} style={{ border: "none", outline: "none", fontSize: 14, color: "#333", background: "transparent", fontFamily: "inherit" }} />
+        </div>
+        <div style={ms.row}><span style={ms.lbl}>금액</span><span style={{ fontSize: 22, fontWeight: "bold", color: amt > 0 ? accent : "#ccc" }}>{amt > 0 ? `${fmt(amt)}원` : "0원"}</span></div>
+        {type !== "transfer" && (
+          <div style={{ ...ms.row, cursor: "pointer", flexWrap: "wrap", gap: 8 }} onClick={() => setShowCat(p => !p)}>
             <span style={ms.lbl}>분류</span>
-            <span style={{fontSize:14,color:cat?"#333":"#ccc"}}>{cat||"카테고리 선택"}</span>
+            <span style={{ fontSize: 14, color: cat ? "#333" : "#ccc" }}>{cat || "카테고리 선택"}</span>
           </div>
         )}
-        {showCat&&type!=="transfer"&&(
-          <div style={{background:"#f9f9f9",padding:12,margin:"0 12px 8px",borderRadius:12}}>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:7}}>
-              {cats.map(c=>(
-                <button key={c.id} onClick={()=>{setCat(c.name);setShowCat(false);}} style={{background:cat===c.name?"#e05555":"#fff",color:cat===c.name?"#fff":"#333",border:`1px solid ${cat===c.name?"#e05555":"#e8e8e8"}`,borderRadius:8,padding:"8px 4px",fontSize:11,cursor:"pointer",textAlign:"center",lineHeight:1.4}}>
-                  <div style={{fontSize:16}}>{c.emoji}</div>{c.name}
+        {showCat && type !== "transfer" && (
+          <div style={{ background: "#f9f9f9", padding: 12, margin: "0 12px 8px", borderRadius: 12 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 7 }}>
+              {cats.map(c => (
+                <button key={c.id} onClick={() => { setCat(c.name); setShowCat(false); }} style={{ background: cat === c.name ? accent : "#fff", color: cat === c.name ? "#fff" : "#333", border: `1px solid ${cat === c.name ? accent : "#e8e8e8"}`, borderRadius: 8, padding: "8px 4px", fontSize: 11, cursor: "pointer", textAlign: "center", lineHeight: 1.4 }}>
+                  <div style={{ fontSize: 16 }}>{c.emoji}</div>{c.name}
                 </button>
               ))}
             </div>
           </div>
         )}
-        <div style={{...ms.row,flexWrap:"wrap",gap:8}}>
+        <div style={{ ...ms.row, flexWrap: "wrap", gap: 8 }}>
           <span style={ms.lbl}>자산</span>
-          <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-            {assets.map(a=>(
-              <button key={a.id} onClick={()=>setAsset(a.name)} style={{padding:"5px 11px",borderRadius:20,fontSize:12,cursor:"pointer",background:asset===a.name?"#e05555":"#f0f0f0",color:asset===a.name?"#fff":"#555",border:"none"}}>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {assets.map(a => (
+              <button key={a.id} onClick={() => setAsset(a.name)} style={{ padding: "5px 11px", borderRadius: 20, fontSize: 12, cursor: "pointer", background: asset === a.name ? accent : "#f0f0f0", color: asset === a.name ? "#fff" : "#555", border: "none" }}>
                 {a.emoji} {a.name}
               </button>
             ))}
@@ -342,64 +401,62 @@ function TxModal({onClose,onSave,onContinue,expCats,incCats,assets,initDate}) {
         </div>
         <div style={ms.row}>
           <span style={ms.lbl}>메모</span>
-          <input value={memo} onChange={e=>setMemo(e.target.value)} placeholder="간단한 메모" style={{border:"none",outline:"none",fontSize:14,flex:1,color:"#333",background:"transparent"}} />
+          <input value={memo} onChange={e => setMemo(e.target.value)} placeholder="간단한 메모" style={{ border: "none", outline: "none", fontSize: 14, flex: 1, color: "#333", background: "transparent" }} />
         </div>
         <div style={ms.numpad}>
-          {[["1","2","3"],["4","5","6"],["7","8","9"],["00","0","del"]].map((row,ri)=>(
-            <div key={ri} style={{display:"contents"}}>
-              {row.map(k=>(
-                <button key={k} style={ms.numBtn(k)} onClick={()=>numKey(k)}>{k==="del"?"⌫":k}</button>
-              ))}
+          {[["1", "2", "3"], ["4", "5", "6"], ["7", "8", "9"], ["00", "0", "del"]].map((row, ri) => (
+            <div key={ri} style={{ display: "contents" }}>
+              {row.map(k => <button key={k} style={ms.numBtn(k)} onClick={() => numKey(k)}>{k === "del" ? "⌫" : k}</button>)}
             </div>
           ))}
         </div>
-        <div style={{display:"flex",gap:10,padding:"6px 16px 24px"}}>
-          <button onClick={save} disabled={!amt} style={{flex:2,padding:15,background:amt?"#e05555":"#f0f0f0",color:amt?"#fff":"#bbb",border:"none",borderRadius:14,fontSize:16,fontWeight:"bold",cursor:amt?"pointer":"default"}}>저장하기</button>
-          <button onClick={cont} disabled={!amt} style={{flex:1,padding:15,background:"#f0f0f0",color:"#555",border:"none",borderRadius:14,fontSize:15,cursor:amt?"pointer":"default"}}>계속</button>
+        <div style={{ display: "flex", gap: 10, padding: "6px 16px 24px" }}>
+          <button onClick={save} disabled={!amt} style={{ flex: 2, padding: 15, background: amt ? accent : "#f0f0f0", color: amt ? "#fff" : "#bbb", border: "none", borderRadius: 14, fontSize: 16, fontWeight: "bold", cursor: amt ? "pointer" : "default" }}>{isEdit ? "수정 완료" : "저장하기"}</button>
+          {!isEdit && <button onClick={cont} disabled={!amt} style={{ flex: 1, padding: 15, background: "#f0f0f0", color: "#555", border: "none", borderRadius: 14, fontSize: 15, cursor: amt ? "pointer" : "default" }}>계속</button>}
         </div>
       </div>
     </div>
   );
 }
 
-function DayModal({day,y,m,txs,onClose,onDel,allCats,onAdd}) {
-  const totalInc=txs.filter(t=>t.type==="income").reduce((s,t)=>s+t.amount,0);
-  const totalExp=txs.filter(t=>t.type==="expense").reduce((s,t)=>s+t.amount,0);
-  const getCat=name=>allCats.find(c=>c.name===name);
+function DayModal({ day, m, txs, onClose, onDel, onEdit, allCats, onAdd }) {
+  const totalInc = txs.filter(t => t.type === "income").reduce((s, t) => s + t.amount, 0);
+  const totalExp = txs.filter(t => t.type === "expense").reduce((s, t) => s + t.amount, 0);
+  const getCat = name => allCats.find(c => c.name === name);
   return (
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:200,display:"flex",flexDirection:"column",justifyContent:"flex-end"}} onClick={e=>e.target===e.currentTarget&&onClose()}>
-      <div style={{background:"#fff",borderRadius:"20px 20px 0 0",maxHeight:"70vh",overflowY:"auto"}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"16px 18px 12px",borderBottom:"1px solid #f5f5f5"}}>
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 200, display: "flex", flexDirection: "column", justifyContent: "flex-end" }} onClick={e => e.target === e.currentTarget && onClose()}>
+      <div style={{ background: "#fff", borderRadius: "20px 20px 0 0", maxHeight: "70vh", overflowY: "auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 18px 12px", borderBottom: "1px solid #f5f5f5" }}>
           <div>
-            <span style={{fontSize:16,fontWeight:"bold",color:"#333"}}>{m+1}월 {day}일</span>
-            {(totalInc>0||totalExp>0)&&<span style={{fontSize:12,color:"#999",marginLeft:10}}>{totalExp>0&&`지출 ${fmt(totalExp)}원`} {totalInc>0&&`수입 ${fmt(totalInc)}원`}</span>}
+            <span style={{ fontSize: 16, fontWeight: "bold", color: "#333" }}>{m + 1}월 {day}일</span>
+            {(totalInc > 0 || totalExp > 0) && <span style={{ fontSize: 12, color: "#999", marginLeft: 10 }}>{totalExp > 0 && `지출 ${fmt(totalExp)}원`} {totalInc > 0 && `수입 ${fmt(totalInc)}원`}</span>}
           </div>
-          <div style={{display:"flex",gap:8}}>
-            <button onClick={onAdd} style={{background:"#e05555",color:"#fff",border:"none",borderRadius:8,padding:"6px 12px",fontSize:13,cursor:"pointer"}}>+ 추가</button>
-            <button onClick={onClose} style={{background:"none",border:"none",fontSize:20,cursor:"pointer",color:"#aaa"}}>✕</button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={onAdd} style={{ background: "#e05555", color: "#fff", border: "none", borderRadius: 8, padding: "6px 12px", fontSize: 13, cursor: "pointer" }}>+ 추가</button>
+            <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#aaa" }}>✕</button>
           </div>
         </div>
-        {txs.length===0
-          ? <div style={{textAlign:"center",color:"#ccc",padding:"30px 0",fontSize:14}}>내역이 없어요</div>
-          : txs.map(t=>{
-            const c=getCat(t.category);
+        {txs.length === 0
+          ? <div style={{ textAlign: "center", color: "#ccc", padding: "30px 0", fontSize: 14 }}>내역이 없어요</div>
+          : txs.map(t => {
+            const c = getCat(t.category);
             return (
-              <div key={t.id} style={{display:"flex",alignItems:"center",padding:"13px 18px",borderBottom:"1px solid #f8f8f8"}}>
-                <div style={{fontSize:22,marginRight:12,minWidth:30}}>{c?.emoji||"📦"}</div>
-                <div style={{flex:1}}>
-                  <div style={{fontSize:14,color:"#333",fontWeight:"500"}}>{t.category||"미분류"}</div>
-                  {t.memo&&<div style={{fontSize:12,color:"#aaa",marginTop:2}}>{t.memo}</div>}
-                  {t.asset&&<div style={{fontSize:11,color:"#bbb"}}>{t.asset}</div>}
+              <div key={t.id} onClick={() => onEdit(t)} style={{ display: "flex", alignItems: "center", padding: "13px 18px", borderBottom: "1px solid #f8f8f8", cursor: "pointer" }}>
+                <div style={{ fontSize: 22, marginRight: 12, minWidth: 30 }}>{c?.emoji || "📦"}</div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 14, color: "#333", fontWeight: "500" }}>{t.category || "미분류"}</div>
+                  {t.memo && <div style={{ fontSize: 12, color: "#aaa", marginTop: 2 }}>{t.memo}</div>}
+                  {t.asset && <div style={{ fontSize: 11, color: "#bbb" }}>{t.asset}</div>}
                 </div>
-                <div style={{fontSize:15,fontWeight:"bold",color:t.type==="income"?"#3d8fe0":"#e05555",marginRight:12}}>
-                  {t.type==="income"?"+":"-"}{fmt(t.amount)}원
+                <div style={{ fontSize: 15, fontWeight: "bold", color: t.type === "income" ? "#3d8fe0" : "#e05555", marginRight: 8 }}>
+                  {t.type === "income" ? "+" : "-"}{fmt(t.amount)}원
                 </div>
-                <button onClick={()=>onDel(t.id)} style={{background:"none",border:"none",color:"#ddd",cursor:"pointer",fontSize:18,padding:4}}>🗑</button>
+                <button aria-label="수정" onClick={e => { e.stopPropagation(); onEdit(t); }} style={{ background: "#fff6f6", border: "1px solid #f5caca", color: "#e05555", cursor: "pointer", fontSize: 12, fontWeight: "bold", borderRadius: 7, padding: "6px 8px", marginRight: 4 }}>수정</button>
+                <button aria-label="삭제" onClick={e => { e.stopPropagation(); onDel(t.id); }} style={{ background: "none", border: "none", color: "#bbb", cursor: "pointer", fontSize: 18, padding: 4 }}>🗑</button>
               </div>
             );
-          })
-        }
-        <div style={{height:20}} />
+          })}
+        <div style={{ height: 20 }} />
       </div>
     </div>
   );
