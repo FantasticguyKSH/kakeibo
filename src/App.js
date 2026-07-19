@@ -459,6 +459,64 @@ function MoreTab({ txs, setTxs, expCats, setExpCats, incCats, setIncCats, assets
     opacity: isWorking ? 0.65 : 1,
   };
 
+  if (sec === "privacy") return (
+    <div style={{ padding: 16, paddingBottom: 90 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
+        <button onClick={() => setSec(null)} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#555" }}>←</button>
+        <h3 style={{ margin: 0, fontSize: 16, fontWeight: "500" }}>개인정보처리방침</h3>
+      </div>
+
+      <div style={{ padding: "14px 16px", marginBottom: 18, background: "#fff7f7", border: "1px solid #ffe2e2", borderRadius: 12, color: "#555", fontSize: 13, lineHeight: 1.65 }}>
+        광고없는가계부는 사용자가 입력한 가계부 데이터를 개발자 서버로 전송하지 않습니다. 데이터는 원칙적으로 사용자의 기기 안에 저장됩니다.
+      </div>
+
+      {[
+        ["1. 처리하는 정보", "거래 날짜, 수입·지출·이체 구분, 금액, 카테고리, 자산, 메모와 사용자가 설정한 카테고리·자산 목록을 기기 안에서 처리합니다."],
+        ["2. 이용 목적", "거래 기록, 합계와 통계 표시, 자산별 잔액 계산, 사용자가 요청한 백업 및 복원에만 사용합니다."],
+        ["3. 수집 및 전송", "개발자는 앱 데이터를 수집하거나 개발자 운영 서버로 전송하지 않습니다. 앱에는 광고, 이용 분석 또는 사용자 추적 SDK가 포함되어 있지 않습니다."],
+        ["4. 백업과 외부 공유", "사용자가 내보내기를 실행하면 백업 파일이 생성되고 Android 공유 화면이 열립니다. 사용자가 선택한 클라우드·이메일·파일 앱의 처리는 해당 서비스의 방침을 따릅니다."],
+        ["5. 보유 및 삭제", "앱 데이터는 사용자가 삭제하거나 앱 저장공간을 지우거나 앱을 제거할 때까지 기기에 남을 수 있습니다. 내보낸 백업 파일은 저장한 위치에서 직접 삭제해야 합니다."],
+        ["6. 계정", "앱은 회원가입이나 사용자 계정을 제공하지 않습니다."],
+      ].map(([title, body]) => (
+        <section key={title} style={{ padding: "16px 0", borderBottom: "1px solid #f0f0f0" }}>
+          <h4 style={{ margin: "0 0 7px", color: "#333", fontSize: 14 }}>{title}</h4>
+          <p style={{ margin: 0, color: "#666", fontSize: 13, lineHeight: 1.65 }}>{body}</p>
+        </section>
+      ))}
+
+      <section style={{ padding: "16px 0" }}>
+        <h4 style={{ margin: "0 0 7px", color: "#333", fontSize: 14 }}>7. 문의</h4>
+        <a href="mailto:devksh8184@gmail.com" style={{ color: "#e05555", fontSize: 13 }}>devksh8184@gmail.com</a>
+      </section>
+      <p style={{ margin: "12px 0 0", color: "#aaa", fontSize: 11 }}>시행일: 2026년 7월 19일</p>
+    </div>
+  );
+
+  if (sec === "storage") return (
+    <div style={{ padding: 16, paddingBottom: 90 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
+        <button onClick={() => setSec(null)} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#555" }}>←</button>
+        <h3 style={{ margin: 0, fontSize: 16, fontWeight: "500" }}>데이터 저장 안내</h3>
+      </div>
+
+      {[
+        { icon: "📱", title: "기기 내부 저장", body: "거래·카테고리·자산 데이터는 이 기기의 앱 저장 영역에 보관됩니다." },
+        { icon: "🚫", title: "개발자 서버 전송 없음", body: "개발자는 사용자가 입력한 가계부 내용을 조회하거나 원격으로 수집하지 않습니다." },
+        { icon: "📤", title: "백업은 사용자 선택", body: "내보내기 버튼을 누른 경우에만 백업 파일을 만들고 공유 대상을 직접 선택합니다." },
+        { icon: "🗑️", title: "앱 삭제 전 백업", body: "앱 삭제 또는 앱 저장공간 초기화 시 데이터가 사라질 수 있으므로 필요한 경우 먼저 백업하세요." },
+        { icon: "🔐", title: "민감정보 입력 주의", body: "메모에 카드번호, 계좌 비밀번호 등 매우 민감한 정보를 기록하지 않는 것을 권장합니다." },
+      ].map(item => (
+        <div key={item.title} style={{ display: "flex", gap: 12, padding: "15px 14px", marginBottom: 10, background: "#f9f9f9", borderRadius: 12 }}>
+          <span style={{ fontSize: 21, flexShrink: 0 }}>{item.icon}</span>
+          <div>
+            <div style={{ marginBottom: 4, color: "#333", fontSize: 14, fontWeight: "600" }}>{item.title}</div>
+            <div style={{ color: "#777", fontSize: 12, lineHeight: 1.6 }}>{item.body}</div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+
   if (sec) return (
     <div style={{ padding: 16 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
@@ -518,6 +576,18 @@ function MoreTab({ txs, setTxs, expCats, setExpCats, incCats, setIncCats, assets
         백업 파일에는 거래 내역과 카테고리·자산 정보가 포함됩니다. 금융 정보가 담길 수 있으므로 안전한 위치에 보관하세요.
       </div>
       {dataMessage && <div style={{ marginTop: 10, color: "#3d8fe0", fontSize: 12, textAlign: "center" }}>{dataMessage}</div>}
+
+      <h3 style={{ margin: "28px 0 12px", fontSize: 16, fontWeight: "500", color: "#333" }}>개인정보 및 앱 정보</h3>
+      <button onClick={() => setSec("privacy")} style={settingButtonStyle}>
+        <span style={{ fontSize: 18 }}>🔒</span>
+        <span style={{ flex: 1, textAlign: "left" }}>개인정보처리방침</span>
+        <span style={{ color: "#ccc", fontSize: 18 }}>›</span>
+      </button>
+      <button onClick={() => setSec("storage")} style={settingButtonStyle}>
+        <span style={{ fontSize: 18 }}>📱</span>
+        <span style={{ flex: 1, textAlign: "left" }}>데이터 저장 안내</span>
+        <span style={{ color: "#ccc", fontSize: 18 }}>›</span>
+      </button>
     </div>
   );
 }
