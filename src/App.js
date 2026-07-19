@@ -1,4 +1,5 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
+import { Capacitor } from "@capacitor/core";
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
 
 const DEF_EXP_CATS = [
@@ -33,6 +34,85 @@ function fromDateInputValue(value) {
 function validDate(value,fallback=new Date()) {
   const date=value instanceof Date?value:new Date(value);
   return Number.isNaN(date.getTime())?fallback:date;
+}
+
+const BACKUP_FORMAT = "kakeibo-backup-v1";
+const BACKUP_VERSION = 1;
+
+function createBackupPayload({ txs, expCats, incCats, assets }) {
+  return {
+    format: BACKUP_FORMAT,
+    version: BACKUP_VERSION,
+    app: "광고없는가계부",
+    exportedAt: new Date().toISOString(),
+    data: {
+      transactions: txs,
+      expenseCategories: expCats,
+      incomeCategories: incCats,
+      assets,
+    },
+  };
+}
+
+function validateBackupPayload(payload) {
+  if (!payload || typeof payload !== "object") {
+    throw new Error("백업 파일의 최상위 형식이 올바르지 않습니다.");
+  }
+  if (payload.format !== BACKUP_FORMAT || payload.version !== BACKUP_VERSION) {
+    throw new Error("지원하지 않는 백업 파일입니다.");
+  }
+
+  const data = payload.data;
+  if (!data || typeof data !== "object") {
+    throw new Error("백업 데이터가 없습니다.");
+  }
+
+  const requiredArrays = [
+    ["transactions", data.transactions],
+    ["expenseCategories", data.expenseCategories],
+    ["incomeCategories", data.incomeCategories],
+    ["assets", data.assets],
+  ];
+  for (const [name, value] of requiredArrays) {
+    if (!Array.isArray(value)) {
+      throw new Error(`${name} 데이터가 올바르지 않습니다.`);
+    }
+  }
+
+  const validTypes = new Set(["income", "expense", "transfer"]);
+  const invalidTransaction = data.transactions.some(t => {
+    const amount = Number(t?.amount);
+    const date = new Date(t?.date);
+    return !t ||
+      typeof t.id !== "string" ||
+      !validTypes.has(t.type) ||
+      !Number.isFinite(amount) ||
+      amount <= 0 ||
+      Number.isNaN(date.getTime());
+  });
+  if (invalidTransaction) {
+    throw new Error("거래 내역 중 올바르지 않은 항목이 있습니다.");
+  }
+
+  const invalidNamedItem = [...data.expenseCategories, ...data.incomeCategories, ...data.assets]
+    .some(item => !item || typeof item.id !== "string" || typeof item.name !== "string");
+  if (invalidNamedItem) {
+    throw new Error("카테고리 또는 자산 정보가 올바르지 않습니다.");
+  }
+
+  return data;
+}
+
+function downloadBackupInBrowser(fileName, text) {
+  const blob = new Blob([text], { type: "application/json;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = fileName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
 }
 
 function useStorage(key, def) {
@@ -143,7 +223,16 @@ export default function App() {
 
       {tab==="stats" && <StatsTab y={y} m={m} prev={prev} next={next} totalInc={totalInc} totalExp={totalExp} expByCat={expByCat} monthTxs={monthTxs} allCats={[...expCats,...incCats]} s={s} />}
       {tab==="assets" && <AssetsTab assets={assets} setAssets={setAssets} txs={txs} />}
-      {tab==="more" && <MoreTab expCats={expCats} setExpCats={setExpCats} incCats={incCats} setIncCats={setIncCats} assets={assets} setAssets={setAssets} />}
+      {tab==="more" && <MoreTab
+        txs={txs}
+        setTxs={setTxs}
+        expCats={expCats}
+        setExpCats={setExpCats}
+        incCats={incCats}
+        setIncCats={setIncCats}
+        assets={assets}
+        setAssets={setAssets}
+      />}
 
       <button style={s.fab} onClick={()=>setModal({day:null})}>+</button>
 
@@ -258,45 +347,177 @@ function AssetsTab({assets,txs}) {
   );
 }
 
-function MoreTab({expCats,setExpCats,incCats,setIncCats,assets,setAssets}) {
-  const [sec,setSec]=useState(null);
-  const [nm,setNm]=useState(""); const [em,setEm]=useState("");
-  const items=sec==="exp"?expCats:sec==="inc"?incCats:assets;
-  const setItems=sec==="exp"?setExpCats:sec==="inc"?setIncCats:setAssets;
-  const label=sec==="exp"?"지출 카테고리":sec==="inc"?"수입 카테고리":"자산";
+function MoreTab({ txs, setTxs, expCats, setExpCats, incCats, setIncCats, assets, setAssets }) {
+  const [sec, setSec] = useState(null);
+  const [nm, setNm] = useState("");
+  const [em, setEm] = useState("");
+  const [dataMessage, setDataMessage] = useState("");
+  const [isWorking, setIsWorking] = useState(false);
+  const fileInputRef = useRef(null);
 
-  const add=()=>{if(!nm.trim())return;setItems(p=>[...p,{id:Date.now().toString(),name:nm.trim(),emoji:em}]);setNm("");setEm("");};
-  const del=id=>setItems(p=>p.filter(c=>c.id!==id));
+  const items = sec === "exp" ? expCats : sec === "inc" ? incCats : assets;
+  const setItems = sec === "exp" ? setExpCats : sec === "inc" ? setIncCats : setAssets;
+  const label = sec === "exp" ? "지출 카테고리" : sec === "inc" ? "수입 카테고리" : "자산";
 
-  if(sec) return (
-    <div style={{padding:16}}>
-      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:20}}>
-        <button onClick={()=>setSec(null)} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:"#555"}}>←</button>
-        <h3 style={{margin:0,fontSize:16,fontWeight:"500"}}>{label} 관리</h3>
+  const add = () => {
+    if (!nm.trim()) return;
+    setItems(p => [...p, { id: Date.now().toString(), name: nm.trim(), emoji: em }]);
+    setNm("");
+    setEm("");
+  };
+  const del = id => setItems(p => p.filter(c => c.id !== id));
+
+  const exportData = async () => {
+    if (isWorking) return;
+    setIsWorking(true);
+    setDataMessage("");
+
+    const payload = createBackupPayload({ txs, expCats, incCats, assets });
+    const text = JSON.stringify(payload, null, 2);
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-");
+    const fileName = `kakeibo-backup-${stamp}.json`;
+
+    try {
+      if (Capacitor.isNativePlatform()) {
+        const { Filesystem, Directory, Encoding } = await import("@capacitor/filesystem");
+        const { Share } = await import("@capacitor/share");
+        const written = await Filesystem.writeFile({
+          path: fileName,
+          data: text,
+          directory: Directory.Cache,
+          encoding: Encoding.UTF8,
+        });
+        await Share.share({
+          title: "광고없는가계부 백업",
+          text: "가계부 데이터 백업 파일입니다.",
+          files: [written.uri],
+          dialogTitle: "백업 파일 저장 또는 공유",
+        });
+      } else {
+        downloadBackupInBrowser(fileName, text);
+      }
+      setDataMessage("백업 파일을 만들었습니다.");
+    } catch (error) {
+      console.error("Backup export failed:", error);
+      window.alert("백업 파일을 만들지 못했습니다. 다시 시도해 주세요.");
+    } finally {
+      setIsWorking(false);
+    }
+  };
+
+  const importData = async event => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file || isWorking) return;
+
+    setIsWorking(true);
+    setDataMessage("");
+
+    try {
+      const text = await file.text();
+      const payload = JSON.parse(text);
+      const data = validateBackupPayload(payload);
+
+      const confirmed = window.confirm(
+        `현재 데이터를 백업 파일의 내용으로 교체합니다.\n\n` +
+        `거래 ${data.transactions.length}건\n` +
+        `지출 카테고리 ${data.expenseCategories.length}개\n` +
+        `수입 카테고리 ${data.incomeCategories.length}개\n` +
+        `자산 ${data.assets.length}개\n\n` +
+        "계속하시겠습니까?"
+      );
+      if (!confirmed) return;
+
+      setTxs(data.transactions);
+      setExpCats(data.expenseCategories);
+      setIncCats(data.incomeCategories);
+      setAssets(data.assets);
+      setDataMessage("백업 데이터를 복원했습니다.");
+      window.alert("데이터 복원이 완료되었습니다.");
+    } catch (error) {
+      console.error("Backup import failed:", error);
+      const detail = error instanceof Error ? error.message : "파일을 읽을 수 없습니다.";
+      window.alert(`백업 파일을 가져오지 못했습니다.\n${detail}`);
+    } finally {
+      setIsWorking(false);
+    }
+  };
+
+  const settingButtonStyle = {
+    display: "flex",
+    alignItems: "center",
+    width: "100%",
+    padding: "15px 14px",
+    background: "#f9f9f9",
+    border: "none",
+    borderRadius: 12,
+    marginBottom: 10,
+    cursor: isWorking ? "default" : "pointer",
+    gap: 12,
+    fontSize: 14,
+    color: "#333",
+    opacity: isWorking ? 0.65 : 1,
+  };
+
+  if (sec) return (
+    <div style={{ padding: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
+        <button onClick={() => setSec(null)} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#555" }}>←</button>
+        <h3 style={{ margin: 0, fontSize: 16, fontWeight: "500" }}>{label} 관리</h3>
       </div>
-      {items.map(it=>(
-        <div key={it.id} style={{display:"flex",alignItems:"center",padding:"12px 0",borderBottom:"1px solid #f5f5f5"}}>
-          <span style={{fontSize:18,marginRight:10,minWidth:28}}>{it.emoji}</span>
-          <span style={{flex:1,fontSize:14,color:"#333"}}>{it.name}</span>
-          <button onClick={()=>del(it.id)} style={{background:"none",border:"none",color:"#e05555",cursor:"pointer",fontSize:16,padding:4}}>✕</button>
+      {items.map(it => (
+        <div key={it.id} style={{ display: "flex", alignItems: "center", padding: "12px 0", borderBottom: "1px solid #f5f5f5" }}>
+          <span style={{ fontSize: 18, marginRight: 10, minWidth: 28 }}>{it.emoji}</span>
+          <span style={{ flex: 1, fontSize: 14, color: "#333" }}>{it.name}</span>
+          <button onClick={() => del(it.id)} style={{ background: "none", border: "none", color: "#e05555", cursor: "pointer", fontSize: 16, padding: 4 }}>✕</button>
         </div>
       ))}
-      <div style={{display:"flex",gap:8,marginTop:16}}>
-        <input value={em} onChange={e=>setEm(e.target.value)} placeholder="이모지" style={{width:48,border:"1px solid #e5e5e5",borderRadius:8,padding:10,fontSize:16,textAlign:"center",outline:"none"}} />
-        <input value={nm} onChange={e=>setNm(e.target.value)} placeholder="이름 입력" onKeyDown={e=>e.key==="Enter"&&add()} style={{flex:1,border:"1px solid #e5e5e5",borderRadius:8,padding:10,fontSize:14,outline:"none"}} />
-        <button onClick={add} style={{background:"#e05555",color:"#fff",border:"none",borderRadius:8,padding:"10px 16px",fontSize:14,cursor:"pointer",fontWeight:"bold"}}>추가</button>
+      <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+        <input value={em} onChange={e => setEm(e.target.value)} placeholder="이모지" style={{ width: 48, border: "1px solid #e5e5e5", borderRadius: 8, padding: 10, fontSize: 16, textAlign: "center", outline: "none" }} />
+        <input value={nm} onChange={e => setNm(e.target.value)} placeholder="이름 입력" onKeyDown={e => e.key === "Enter" && add()} style={{ flex: 1, border: "1px solid #e5e5e5", borderRadius: 8, padding: 10, fontSize: 14, outline: "none" }} />
+        <button onClick={add} style={{ background: "#e05555", color: "#fff", border: "none", borderRadius: 8, padding: "10px 16px", fontSize: 14, cursor: "pointer", fontWeight: "bold" }}>추가</button>
       </div>
     </div>
   );
 
   return (
-    <div style={{padding:16}}>
-      <h3 style={{margin:"0 0 16px",fontSize:16,fontWeight:"500",color:"#333"}}>설정</h3>
-      {[{id:"exp",l:"지출 카테고리 관리",ic:"📋"},{id:"inc",l:"수입 카테고리 관리",ic:"💰"},{id:"asset",l:"자산 관리",ic:"🏦"}].map(s=>(
-        <button key={s.id} onClick={()=>setSec(s.id)} style={{display:"flex",alignItems:"center",width:"100%",padding:"15px 14px",background:"#f9f9f9",border:"none",borderRadius:12,marginBottom:10,cursor:"pointer",gap:12,fontSize:14,color:"#333"}}>
-          <span style={{fontSize:18}}>{s.ic}</span><span style={{flex:1,textAlign:"left"}}>{s.l}</span><span style={{color:"#ccc",fontSize:18}}>›</span>
+    <div style={{ padding: 16 }}>
+      <h3 style={{ margin: "0 0 16px", fontSize: 16, fontWeight: "500", color: "#333" }}>설정</h3>
+      {[
+        { id: "exp", l: "지출 카테고리 관리", ic: "📋" },
+        { id: "inc", l: "수입 카테고리 관리", ic: "💰" },
+        { id: "asset", l: "자산 관리", ic: "🏦" },
+      ].map(item => (
+        <button key={item.id} onClick={() => setSec(item.id)} style={settingButtonStyle}>
+          <span style={{ fontSize: 18 }}>{item.ic}</span>
+          <span style={{ flex: 1, textAlign: "left" }}>{item.l}</span>
+          <span style={{ color: "#ccc", fontSize: 18 }}>›</span>
         </button>
       ))}
+
+      <h3 style={{ margin: "28px 0 12px", fontSize: 16, fontWeight: "500", color: "#333" }}>데이터 관리</h3>
+      <button onClick={exportData} disabled={isWorking} style={settingButtonStyle}>
+        <span style={{ fontSize: 18 }}>📤</span>
+        <span style={{ flex: 1, textAlign: "left" }}>백업 파일 내보내기</span>
+        <span style={{ color: "#ccc", fontSize: 18 }}>›</span>
+      </button>
+      <button onClick={() => fileInputRef.current?.click()} disabled={isWorking} style={settingButtonStyle}>
+        <span style={{ fontSize: 18 }}>📥</span>
+        <span style={{ flex: 1, textAlign: "left" }}>백업 파일 가져오기</span>
+        <span style={{ color: "#ccc", fontSize: 18 }}>›</span>
+      </button>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="application/json,.json"
+        onChange={importData}
+        style={{ display: "none" }}
+      />
+
+      <div style={{ marginTop: 10, padding: "12px 14px", background: "#fff7f7", borderRadius: 10, color: "#777", fontSize: 12, lineHeight: 1.55 }}>
+        백업 파일에는 거래 내역과 카테고리·자산 정보가 포함됩니다. 금융 정보가 담길 수 있으므로 안전한 위치에 보관하세요.
+      </div>
+      {dataMessage && <div style={{ marginTop: 10, color: "#3d8fe0", fontSize: 12, textAlign: "center" }}>{dataMessage}</div>}
     </div>
   );
 }
