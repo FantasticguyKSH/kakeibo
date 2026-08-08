@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { Capacitor } from "@capacitor/core";
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
 
-const DEF_EXP_CATS = [
+const LEGACY_DEF_EXP_CATS = [
   {id:"food",name:"식비",emoji:"🍜"},{id:"transport",name:"교통/차량",emoji:"🚕"},
   {id:"culture",name:"문화생활",emoji:"🖼️"},{id:"mart",name:"마트/편의점",emoji:"🛒"},
   {id:"fashion",name:"패션/미용",emoji:"🧥"},{id:"living",name:"생활용품",emoji:"🪑"},
@@ -10,11 +10,55 @@ const DEF_EXP_CATS = [
   {id:"edu",name:"교육",emoji:"📖"},{id:"gift",name:"경조사/회비",emoji:"🎁"},
   {id:"parents",name:"부모님",emoji:"👵"},{id:"etc",name:"기타",emoji:"📦"},
 ];
-const DEF_INC_CATS = [
+const LEGACY_DEF_INC_CATS = [
   {id:"salary",name:"급여",emoji:"💼"},{id:"side",name:"부업",emoji:"💻"},
   {id:"invest",name:"투자수익",emoji:"📈"},{id:"gift2",name:"용돈",emoji:"🎀"},
   {id:"etc2",name:"기타",emoji:"📦"},
 ];
+
+const DEF_INC_CATS = [
+  {id:"salary",name:"급여",emoji:"💼"},
+  {id:"allowance",name:"용돈",emoji:"💰"},
+  {id:"invest",name:"투자수익",emoji:"📈"},
+  {id:"side",name:"부수입",emoji:"🧑‍💻"},
+  {id:"bonus",name:"상여·보너스",emoji:"🎁"},
+  {id:"refund",name:"환급",emoji:"↩️"},
+  {id:"resale",name:"중고판매",emoji:"🏷️"},
+  {id:"other-income",name:"기타소득",emoji:"🎉"},
+];
+
+const DEF_EXP_CATS = [
+  {id:"food",name:"식비",emoji:"🍚"},
+  {id:"cafe",name:"카페·간식",emoji:"☕"},
+  {id:"transport",name:"교통",emoji:"🚇"},
+  {id:"housing",name:"주거",emoji:"🏠"},
+  {id:"telecom",name:"통신",emoji:"📱"},
+  {id:"shopping",name:"쇼핑",emoji:"🛍️"},
+  {id:"leisure",name:"여가·취미",emoji:"🎮"},
+  {id:"gathering",name:"모임·술",emoji:"🍻"},
+  {id:"health",name:"의료·건강",emoji:"🏥"},
+  {id:"education",name:"교육",emoji:"📚"},
+  {id:"travel",name:"여행",emoji:"✈️"},
+  {id:"gifts",name:"경조사·선물",emoji:"🎁"},
+  {id:"subscription",name:"구독",emoji:"🔄"},
+  {id:"finance",name:"금융",emoji:"💳"},
+  {id:"tax-insurance",name:"세금·보험",emoji:"🧾"},
+  {id:"pet",name:"반려동물",emoji:"🐶"},
+  {id:"other",name:"기타",emoji:"📦"},
+];
+
+function sameCategoryList(a, b) {
+  if (!Array.isArray(a) || a.length !== b.length) return false;
+  return a.every((item, index) =>
+    item?.id === b[index].id &&
+    item?.name === b[index].name &&
+    item?.emoji === b[index].emoji
+  );
+}
+
+function migrateLegacyCategories(categories, legacyDefaults, nextDefaults) {
+  return sameCategoryList(categories, legacyDefaults) ? nextDefaults : categories;
+}
 const DEF_ASSETS = [
   {id:"cash",name:"현금",emoji:"💵"},{id:"bank",name:"은행",emoji:"🏦"},{id:"card",name:"카드",emoji:"💳"},
 ];
@@ -133,6 +177,16 @@ export default function App() {
   const [incCats, setIncCats] = useStorage("kk_incats", DEF_INC_CATS);
   const [assets, setAssets] = useStorage("kk_assets", DEF_ASSETS);
   const [modal, setModal] = useState(null);
+
+  useEffect(() => {
+    const migrationKey = "kk_category_schema_v2";
+    try {
+      if (localStorage.getItem(migrationKey) === "1") return;
+      setExpCats(current => migrateLegacyCategories(current, LEGACY_DEF_EXP_CATS, DEF_EXP_CATS));
+      setIncCats(current => migrateLegacyCategories(current, LEGACY_DEF_INC_CATS, DEF_INC_CATS));
+      localStorage.setItem(migrationKey, "1");
+    } catch {}
+  }, [setExpCats, setIncCats]);
   const [dayModal, setDayModal] = useState(null);
 
   const {y,m} = cur;
@@ -429,8 +483,8 @@ function MoreTab({ txs, setTxs, expCats, setExpCats, incCats, setIncCats, assets
       if (!confirmed) return;
 
       setTxs(data.transactions);
-      setExpCats(data.expenseCategories);
-      setIncCats(data.incomeCategories);
+      setExpCats(migrateLegacyCategories(data.expenseCategories, LEGACY_DEF_EXP_CATS, DEF_EXP_CATS));
+      setIncCats(migrateLegacyCategories(data.incomeCategories, LEGACY_DEF_INC_CATS, DEF_INC_CATS));
       setAssets(data.assets);
       setDataMessage("백업 데이터를 복원했습니다.");
       window.alert("데이터 복원이 완료되었습니다.");
