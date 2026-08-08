@@ -1,7 +1,8 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
+import { Capacitor } from "@capacitor/core";
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
 
-const DEF_EXP_CATS = [
+const LEGACY_DEF_EXP_CATS = [
   {id:"food",name:"식비",emoji:"🍜"},{id:"transport",name:"교통/차량",emoji:"🚕"},
   {id:"culture",name:"문화생활",emoji:"🖼️"},{id:"mart",name:"마트/편의점",emoji:"🛒"},
   {id:"fashion",name:"패션/미용",emoji:"🧥"},{id:"living",name:"생활용품",emoji:"🪑"},
@@ -9,17 +10,154 @@ const DEF_EXP_CATS = [
   {id:"edu",name:"교육",emoji:"📖"},{id:"gift",name:"경조사/회비",emoji:"🎁"},
   {id:"parents",name:"부모님",emoji:"👵"},{id:"etc",name:"기타",emoji:"📦"},
 ];
-const DEF_INC_CATS = [
+const LEGACY_DEF_INC_CATS = [
   {id:"salary",name:"급여",emoji:"💼"},{id:"side",name:"부업",emoji:"💻"},
   {id:"invest",name:"투자수익",emoji:"📈"},{id:"gift2",name:"용돈",emoji:"🎀"},
   {id:"etc2",name:"기타",emoji:"📦"},
 ];
+
+const DEF_INC_CATS = [
+  {id:"salary",name:"급여",emoji:"💼"},
+  {id:"allowance",name:"용돈",emoji:"💰"},
+  {id:"invest",name:"투자수익",emoji:"📈"},
+  {id:"side",name:"부수입",emoji:"🧑‍💻"},
+  {id:"bonus",name:"상여·보너스",emoji:"🎁"},
+  {id:"refund",name:"환급",emoji:"↩️"},
+  {id:"resale",name:"중고판매",emoji:"🏷️"},
+  {id:"other-income",name:"기타소득",emoji:"🎉"},
+];
+
+const DEF_EXP_CATS = [
+  {id:"food",name:"식비",emoji:"🍚"},
+  {id:"cafe",name:"카페·간식",emoji:"☕"},
+  {id:"transport",name:"교통",emoji:"🚇"},
+  {id:"housing",name:"주거",emoji:"🏠"},
+  {id:"telecom",name:"통신",emoji:"📱"},
+  {id:"shopping",name:"쇼핑",emoji:"🛍️"},
+  {id:"leisure",name:"여가·취미",emoji:"🎮"},
+  {id:"gathering",name:"모임·술",emoji:"🍻"},
+  {id:"health",name:"의료·건강",emoji:"🏥"},
+  {id:"education",name:"교육",emoji:"📚"},
+  {id:"travel",name:"여행",emoji:"✈️"},
+  {id:"gifts",name:"경조사·선물",emoji:"🎁"},
+  {id:"subscription",name:"구독",emoji:"🔄"},
+  {id:"finance",name:"금융",emoji:"💳"},
+  {id:"tax-insurance",name:"세금·보험",emoji:"🧾"},
+  {id:"pet",name:"반려동물",emoji:"🐶"},
+  {id:"other",name:"기타",emoji:"📦"},
+];
+
+function sameCategoryList(a, b) {
+  if (!Array.isArray(a) || a.length !== b.length) return false;
+  return a.every((item, index) =>
+    item?.id === b[index].id &&
+    item?.name === b[index].name &&
+    item?.emoji === b[index].emoji
+  );
+}
+
+function migrateLegacyCategories(categories, legacyDefaults, nextDefaults) {
+  return sameCategoryList(categories, legacyDefaults) ? nextDefaults : categories;
+}
 const DEF_ASSETS = [
   {id:"cash",name:"현금",emoji:"💵"},{id:"bank",name:"은행",emoji:"🏦"},{id:"card",name:"카드",emoji:"💳"},
 ];
 const PIE_COLORS = ["#FF6B6B","#FF8E53","#FFC300","#4ECDC4","#45B7D1","#96CEB4","#DDA0DD","#85C1E9","#F0E68C","#98D8C8","#FFB6C1","#B0C4DE"];
 const DAYS = ["일","월","화","수","목","금","토"];
 const fmt = n => Math.abs(n).toLocaleString("ko-KR");
+
+function toDateInputValue(date) {
+  return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,"0")}-${String(date.getDate()).padStart(2,"0")}`;
+}
+
+function fromDateInputValue(value) {
+  const [year,month,day] = value.split("-").map(Number);
+  return new Date(year,month-1,day,12,0,0,0);
+}
+
+function validDate(value,fallback=new Date()) {
+  const date=value instanceof Date?value:new Date(value);
+  return Number.isNaN(date.getTime())?fallback:date;
+}
+
+const BACKUP_FORMAT = "kakeibo-backup-v1";
+const BACKUP_VERSION = 1;
+
+function createBackupPayload({ txs, expCats, incCats, assets }) {
+  return {
+    format: BACKUP_FORMAT,
+    version: BACKUP_VERSION,
+    app: "광고없는가계부",
+    exportedAt: new Date().toISOString(),
+    data: {
+      transactions: txs,
+      expenseCategories: expCats,
+      incomeCategories: incCats,
+      assets,
+    },
+  };
+}
+
+function validateBackupPayload(payload) {
+  if (!payload || typeof payload !== "object") {
+    throw new Error("백업 파일의 최상위 형식이 올바르지 않습니다.");
+  }
+  if (payload.format !== BACKUP_FORMAT || payload.version !== BACKUP_VERSION) {
+    throw new Error("지원하지 않는 백업 파일입니다.");
+  }
+
+  const data = payload.data;
+  if (!data || typeof data !== "object") {
+    throw new Error("백업 데이터가 없습니다.");
+  }
+
+  const requiredArrays = [
+    ["transactions", data.transactions],
+    ["expenseCategories", data.expenseCategories],
+    ["incomeCategories", data.incomeCategories],
+    ["assets", data.assets],
+  ];
+  for (const [name, value] of requiredArrays) {
+    if (!Array.isArray(value)) {
+      throw new Error(`${name} 데이터가 올바르지 않습니다.`);
+    }
+  }
+
+  const validTypes = new Set(["income", "expense", "transfer"]);
+  const invalidTransaction = data.transactions.some(t => {
+    const amount = Number(t?.amount);
+    const date = new Date(t?.date);
+    return !t ||
+      typeof t.id !== "string" ||
+      !validTypes.has(t.type) ||
+      !Number.isFinite(amount) ||
+      amount <= 0 ||
+      Number.isNaN(date.getTime());
+  });
+  if (invalidTransaction) {
+    throw new Error("거래 내역 중 올바르지 않은 항목이 있습니다.");
+  }
+
+  const invalidNamedItem = [...data.expenseCategories, ...data.incomeCategories, ...data.assets]
+    .some(item => !item || typeof item.id !== "string" || typeof item.name !== "string");
+  if (invalidNamedItem) {
+    throw new Error("카테고리 또는 자산 정보가 올바르지 않습니다.");
+  }
+
+  return data;
+}
+
+function downloadBackupInBrowser(fileName, text) {
+  const blob = new Blob([text], { type: "application/json;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = fileName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
 
 function useStorage(key, def) {
   const [val, setVal] = useState(()=>{
@@ -39,6 +177,16 @@ export default function App() {
   const [incCats, setIncCats] = useStorage("kk_incats", DEF_INC_CATS);
   const [assets, setAssets] = useStorage("kk_assets", DEF_ASSETS);
   const [modal, setModal] = useState(null);
+
+  useEffect(() => {
+    const migrationKey = "kk_category_schema_v2";
+    try {
+      if (localStorage.getItem(migrationKey) === "1") return;
+      setExpCats(current => migrateLegacyCategories(current, LEGACY_DEF_EXP_CATS, DEF_EXP_CATS));
+      setIncCats(current => migrateLegacyCategories(current, LEGACY_DEF_INC_CATS, DEF_INC_CATS));
+      localStorage.setItem(migrationKey, "1");
+    } catch {}
+  }, [setExpCats, setIncCats]);
   const [dayModal, setDayModal] = useState(null);
 
   const {y,m} = cur;
@@ -65,6 +213,7 @@ export default function App() {
   const next = ()=>setCur(({y,m})=>m===11?{y:y+1,m:0}:{y,m:m+1});
 
   const addTx = tx => setTxs(p=>[...p,tx]);
+  const updateTx = tx => setTxs(p=>p.map(t=>t.id===tx.id?tx:t));
   const delTx = id => setTxs(p=>p.filter(t=>t.id!==id));
 
   const bal = totalInc - totalExp;
@@ -128,7 +277,16 @@ export default function App() {
 
       {tab==="stats" && <StatsTab y={y} m={m} prev={prev} next={next} totalInc={totalInc} totalExp={totalExp} expByCat={expByCat} monthTxs={monthTxs} allCats={[...expCats,...incCats]} s={s} />}
       {tab==="assets" && <AssetsTab assets={assets} setAssets={setAssets} txs={txs} />}
-      {tab==="more" && <MoreTab expCats={expCats} setExpCats={setExpCats} incCats={incCats} setIncCats={setIncCats} assets={assets} setAssets={setAssets} />}
+      {tab==="more" && <MoreTab
+        txs={txs}
+        setTxs={setTxs}
+        expCats={expCats}
+        setExpCats={setExpCats}
+        incCats={incCats}
+        setIncCats={setIncCats}
+        assets={assets}
+        setAssets={setAssets}
+      />}
 
       <button style={s.fab} onClick={()=>setModal({day:null})}>+</button>
 
@@ -140,8 +298,27 @@ export default function App() {
         ))}
       </div>
 
-      {modal && <TxModal onClose={()=>setModal(null)} onSave={tx=>{addTx(tx);setModal(null);}} onContinue={tx=>{addTx(tx);}} expCats={expCats} incCats={incCats} assets={assets} initDate={modal.day?new Date(y,m,modal.day):new Date()} />}
-      {dayModal && <DayModal day={dayModal} y={y} m={m} txs={txs.filter(t=>{const d=new Date(t.date);return d.getFullYear()===y&&d.getMonth()===m&&d.getDate()===dayModal;})} onClose={()=>setDayModal(null)} onDel={delTx} allCats={[...expCats,...incCats]} onAdd={()=>{setModal({day:dayModal});setDayModal(null);}} />}
+      {modal && <TxModal
+        onClose={()=>setModal(null)}
+        onSave={tx=>{modal.tx?updateTx(tx):addTx(tx);setModal(null);}}
+        onContinue={modal.tx?null:tx=>addTx(tx)}
+        expCats={expCats}
+        incCats={incCats}
+        assets={assets}
+        initialTx={modal.tx}
+        initDate={modal.tx?validDate(modal.tx.date):modal.day?new Date(y,m,modal.day,12):new Date()}
+      />}
+      {dayModal && <DayModal
+        day={dayModal}
+        y={y}
+        m={m}
+        txs={txs.filter(t=>{const d=new Date(t.date);return d.getFullYear()===y&&d.getMonth()===m&&d.getDate()===dayModal;})}
+        onClose={()=>setDayModal(null)}
+        onDel={delTx}
+        onEdit={tx=>{setModal({day:null,tx});setDayModal(null);}}
+        allCats={[...expCats,...incCats]}
+        onAdd={()=>{setModal({day:dayModal,tx:null});setDayModal(null);}}
+      />}
     </div>
   );
 }
@@ -224,117 +401,344 @@ function AssetsTab({assets,txs}) {
   );
 }
 
-function MoreTab({expCats,setExpCats,incCats,setIncCats,assets,setAssets}) {
-  const [sec,setSec]=useState(null);
-  const [nm,setNm]=useState(""); const [em,setEm]=useState("");
-  const items=sec==="exp"?expCats:sec==="inc"?incCats:assets;
-  const setItems=sec==="exp"?setExpCats:sec==="inc"?setIncCats:setAssets;
-  const label=sec==="exp"?"지출 카테고리":sec==="inc"?"수입 카테고리":"자산";
+function MoreTab({ txs, setTxs, expCats, setExpCats, incCats, setIncCats, assets, setAssets }) {
+  const [sec, setSec] = useState(null);
+  const [nm, setNm] = useState("");
+  const [em, setEm] = useState("");
+  const [dataMessage, setDataMessage] = useState("");
+  const [isWorking, setIsWorking] = useState(false);
+  const fileInputRef = useRef(null);
 
-  const add=()=>{if(!nm.trim())return;setItems(p=>[...p,{id:Date.now().toString(),name:nm.trim(),emoji:em}]);setNm("");setEm("");};
-  const del=id=>setItems(p=>p.filter(c=>c.id!==id));
+  const items = sec === "exp" ? expCats : sec === "inc" ? incCats : assets;
+  const setItems = sec === "exp" ? setExpCats : sec === "inc" ? setIncCats : setAssets;
+  const label = sec === "exp" ? "지출 카테고리" : sec === "inc" ? "수입 카테고리" : "자산";
 
-  if(sec) return (
-    <div style={{padding:16}}>
-      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:20}}>
-        <button onClick={()=>setSec(null)} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:"#555"}}>←</button>
-        <h3 style={{margin:0,fontSize:16,fontWeight:"500"}}>{label} 관리</h3>
+  const add = () => {
+    if (!nm.trim()) return;
+    setItems(p => [...p, { id: Date.now().toString(), name: nm.trim(), emoji: em }]);
+    setNm("");
+    setEm("");
+  };
+  const del = id => setItems(p => p.filter(c => c.id !== id));
+
+  const exportData = async () => {
+    if (isWorking) return;
+    setIsWorking(true);
+    setDataMessage("");
+
+    const payload = createBackupPayload({ txs, expCats, incCats, assets });
+    const text = JSON.stringify(payload, null, 2);
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-");
+    const fileName = `kakeibo-backup-${stamp}.json`;
+
+    try {
+      if (Capacitor.isNativePlatform()) {
+        const { Filesystem, Directory, Encoding } = await import("@capacitor/filesystem");
+        const { Share } = await import("@capacitor/share");
+        const written = await Filesystem.writeFile({
+          path: fileName,
+          data: text,
+          directory: Directory.Cache,
+          encoding: Encoding.UTF8,
+        });
+        await Share.share({
+          title: "광고없는가계부 백업",
+          text: "가계부 데이터 백업 파일입니다.",
+          files: [written.uri],
+          dialogTitle: "백업 파일 저장 또는 공유",
+        });
+      } else {
+        downloadBackupInBrowser(fileName, text);
+      }
+      setDataMessage("백업 파일을 만들었습니다.");
+    } catch (error) {
+      console.error("Backup export failed:", error);
+      window.alert("백업 파일을 만들지 못했습니다. 다시 시도해 주세요.");
+    } finally {
+      setIsWorking(false);
+    }
+  };
+
+  const importData = async event => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file || isWorking) return;
+
+    setIsWorking(true);
+    setDataMessage("");
+
+    try {
+      const text = await file.text();
+      const payload = JSON.parse(text);
+      const data = validateBackupPayload(payload);
+
+      const confirmed = window.confirm(
+        `현재 데이터를 백업 파일의 내용으로 교체합니다.\n\n` +
+        `거래 ${data.transactions.length}건\n` +
+        `지출 카테고리 ${data.expenseCategories.length}개\n` +
+        `수입 카테고리 ${data.incomeCategories.length}개\n` +
+        `자산 ${data.assets.length}개\n\n` +
+        "계속하시겠습니까?"
+      );
+      if (!confirmed) return;
+
+      setTxs(data.transactions);
+      setExpCats(migrateLegacyCategories(data.expenseCategories, LEGACY_DEF_EXP_CATS, DEF_EXP_CATS));
+      setIncCats(migrateLegacyCategories(data.incomeCategories, LEGACY_DEF_INC_CATS, DEF_INC_CATS));
+      setAssets(data.assets);
+      setDataMessage("백업 데이터를 복원했습니다.");
+      window.alert("데이터 복원이 완료되었습니다.");
+    } catch (error) {
+      console.error("Backup import failed:", error);
+      const detail = error instanceof Error ? error.message : "파일을 읽을 수 없습니다.";
+      window.alert(`백업 파일을 가져오지 못했습니다.\n${detail}`);
+    } finally {
+      setIsWorking(false);
+    }
+  };
+
+  const settingButtonStyle = {
+    display: "flex",
+    alignItems: "center",
+    width: "100%",
+    padding: "15px 14px",
+    background: "#f9f9f9",
+    border: "none",
+    borderRadius: 12,
+    marginBottom: 10,
+    cursor: isWorking ? "default" : "pointer",
+    gap: 12,
+    fontSize: 14,
+    color: "#333",
+    opacity: isWorking ? 0.65 : 1,
+  };
+
+  if (sec === "privacy") return (
+    <div style={{ padding: 16, paddingBottom: 90 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
+        <button onClick={() => setSec(null)} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#555" }}>←</button>
+        <h3 style={{ margin: 0, fontSize: 16, fontWeight: "500" }}>개인정보처리방침</h3>
       </div>
-      {items.map(it=>(
-        <div key={it.id} style={{display:"flex",alignItems:"center",padding:"12px 0",borderBottom:"1px solid #f5f5f5"}}>
-          <span style={{fontSize:18,marginRight:10,minWidth:28}}>{it.emoji}</span>
-          <span style={{flex:1,fontSize:14,color:"#333"}}>{it.name}</span>
-          <button onClick={()=>del(it.id)} style={{background:"none",border:"none",color:"#e05555",cursor:"pointer",fontSize:16,padding:4}}>✕</button>
+
+      <div style={{ padding: "14px 16px", marginBottom: 18, background: "#fff7f7", border: "1px solid #ffe2e2", borderRadius: 12, color: "#555", fontSize: 13, lineHeight: 1.65 }}>
+        광고없는가계부는 사용자가 입력한 가계부 데이터를 개발자 서버로 전송하지 않습니다. 데이터는 원칙적으로 사용자의 기기 안에 저장됩니다.
+      </div>
+
+      {[
+        ["1. 처리하는 정보", "거래 날짜, 수입·지출·이체 구분, 금액, 카테고리, 자산, 메모와 사용자가 설정한 카테고리·자산 목록을 기기 안에서 처리합니다."],
+        ["2. 이용 목적", "거래 기록, 합계와 통계 표시, 자산별 잔액 계산, 사용자가 요청한 백업 및 복원에만 사용합니다."],
+        ["3. 수집 및 전송", "개발자는 앱 데이터를 수집하거나 개발자 운영 서버로 전송하지 않습니다. 앱에는 광고, 이용 분석 또는 사용자 추적 SDK가 포함되어 있지 않습니다."],
+        ["4. 백업과 외부 공유", "사용자가 내보내기를 실행하면 백업 파일이 생성되고 Android 공유 화면이 열립니다. 사용자가 선택한 클라우드·이메일·파일 앱의 처리는 해당 서비스의 방침을 따릅니다."],
+        ["5. 보유 및 삭제", "앱 데이터는 사용자가 삭제하거나 앱 저장공간을 지우거나 앱을 제거할 때까지 기기에 남을 수 있습니다. 내보낸 백업 파일은 저장한 위치에서 직접 삭제해야 합니다."],
+        ["6. 계정", "앱은 회원가입이나 사용자 계정을 제공하지 않습니다."],
+      ].map(([title, body]) => (
+        <section key={title} style={{ padding: "16px 0", borderBottom: "1px solid #f0f0f0" }}>
+          <h4 style={{ margin: "0 0 7px", color: "#333", fontSize: 14 }}>{title}</h4>
+          <p style={{ margin: 0, color: "#666", fontSize: 13, lineHeight: 1.65 }}>{body}</p>
+        </section>
+      ))}
+
+      <section style={{ padding: "16px 0" }}>
+        <h4 style={{ margin: "0 0 7px", color: "#333", fontSize: 14 }}>7. 문의</h4>
+        <a href="mailto:devksh8184@gmail.com" style={{ color: "#e05555", fontSize: 13 }}>devksh8184@gmail.com</a>
+      </section>
+      <p style={{ margin: "12px 0 0", color: "#aaa", fontSize: 11 }}>시행일: 2026년 7월 19일</p>
+    </div>
+  );
+
+  if (sec === "storage") return (
+    <div style={{ padding: 16, paddingBottom: 90 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
+        <button onClick={() => setSec(null)} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#555" }}>←</button>
+        <h3 style={{ margin: 0, fontSize: 16, fontWeight: "500" }}>데이터 저장 안내</h3>
+      </div>
+
+      {[
+        { icon: "📱", title: "기기 내부 저장", body: "거래·카테고리·자산 데이터는 이 기기의 앱 저장 영역에 보관됩니다." },
+        { icon: "🚫", title: "개발자 서버 전송 없음", body: "개발자는 사용자가 입력한 가계부 내용을 조회하거나 원격으로 수집하지 않습니다." },
+        { icon: "📤", title: "백업은 사용자 선택", body: "내보내기 버튼을 누른 경우에만 백업 파일을 만들고 공유 대상을 직접 선택합니다." },
+        { icon: "🗑️", title: "앱 삭제 전 백업", body: "앱 삭제 또는 앱 저장공간 초기화 시 데이터가 사라질 수 있으므로 필요한 경우 먼저 백업하세요." },
+        { icon: "🔐", title: "민감정보 입력 주의", body: "메모에 카드번호, 계좌 비밀번호 등 매우 민감한 정보를 기록하지 않는 것을 권장합니다." },
+      ].map(item => (
+        <div key={item.title} style={{ display: "flex", gap: 12, padding: "15px 14px", marginBottom: 10, background: "#f9f9f9", borderRadius: 12 }}>
+          <span style={{ fontSize: 21, flexShrink: 0 }}>{item.icon}</span>
+          <div>
+            <div style={{ marginBottom: 4, color: "#333", fontSize: 14, fontWeight: "600" }}>{item.title}</div>
+            <div style={{ color: "#777", fontSize: 12, lineHeight: 1.6 }}>{item.body}</div>
+          </div>
         </div>
       ))}
-      <div style={{display:"flex",gap:8,marginTop:16}}>
-        <input value={em} onChange={e=>setEm(e.target.value)} placeholder="이모지" style={{width:48,border:"1px solid #e5e5e5",borderRadius:8,padding:10,fontSize:16,textAlign:"center",outline:"none"}} />
-        <input value={nm} onChange={e=>setNm(e.target.value)} placeholder="이름 입력" onKeyDown={e=>e.key==="Enter"&&add()} style={{flex:1,border:"1px solid #e5e5e5",borderRadius:8,padding:10,fontSize:14,outline:"none"}} />
-        <button onClick={add} style={{background:"#e05555",color:"#fff",border:"none",borderRadius:8,padding:"10px 16px",fontSize:14,cursor:"pointer",fontWeight:"bold"}}>추가</button>
+    </div>
+  );
+
+  if (sec) return (
+    <div style={{ padding: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
+        <button onClick={() => setSec(null)} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#555" }}>←</button>
+        <h3 style={{ margin: 0, fontSize: 16, fontWeight: "500" }}>{label} 관리</h3>
+      </div>
+      {items.map(it => (
+        <div key={it.id} style={{ display: "flex", alignItems: "center", padding: "12px 0", borderBottom: "1px solid #f5f5f5" }}>
+          <span style={{ fontSize: 18, marginRight: 10, minWidth: 28 }}>{it.emoji}</span>
+          <span style={{ flex: 1, fontSize: 14, color: "#333" }}>{it.name}</span>
+          <button onClick={() => del(it.id)} style={{ background: "none", border: "none", color: "#e05555", cursor: "pointer", fontSize: 16, padding: 4 }}>✕</button>
+        </div>
+      ))}
+      <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+        <input value={em} onChange={e => setEm(e.target.value)} placeholder="이모지" style={{ width: 48, border: "1px solid #e5e5e5", borderRadius: 8, padding: 10, fontSize: 16, textAlign: "center", outline: "none" }} />
+        <input value={nm} onChange={e => setNm(e.target.value)} placeholder="이름 입력" onKeyDown={e => e.key === "Enter" && add()} style={{ flex: 1, border: "1px solid #e5e5e5", borderRadius: 8, padding: 10, fontSize: 14, outline: "none" }} />
+        <button onClick={add} style={{ background: "#e05555", color: "#fff", border: "none", borderRadius: 8, padding: "10px 16px", fontSize: 14, cursor: "pointer", fontWeight: "bold" }}>추가</button>
       </div>
     </div>
   );
 
   return (
-    <div style={{padding:16}}>
-      <h3 style={{margin:"0 0 16px",fontSize:16,fontWeight:"500",color:"#333"}}>설정</h3>
-      {[{id:"exp",l:"지출 카테고리 관리",ic:"📋"},{id:"inc",l:"수입 카테고리 관리",ic:"💰"},{id:"asset",l:"자산 관리",ic:"🏦"}].map(s=>(
-        <button key={s.id} onClick={()=>setSec(s.id)} style={{display:"flex",alignItems:"center",width:"100%",padding:"15px 14px",background:"#f9f9f9",border:"none",borderRadius:12,marginBottom:10,cursor:"pointer",gap:12,fontSize:14,color:"#333"}}>
-          <span style={{fontSize:18}}>{s.ic}</span><span style={{flex:1,textAlign:"left"}}>{s.l}</span><span style={{color:"#ccc",fontSize:18}}>›</span>
+    <div style={{ padding: 16 }}>
+      <h3 style={{ margin: "0 0 16px", fontSize: 16, fontWeight: "500", color: "#333" }}>설정</h3>
+      {[
+        { id: "exp", l: "지출 카테고리 관리", ic: "📋" },
+        { id: "inc", l: "수입 카테고리 관리", ic: "💰" },
+        { id: "asset", l: "자산 관리", ic: "🏦" },
+      ].map(item => (
+        <button key={item.id} onClick={() => setSec(item.id)} style={settingButtonStyle}>
+          <span style={{ fontSize: 18 }}>{item.ic}</span>
+          <span style={{ flex: 1, textAlign: "left" }}>{item.l}</span>
+          <span style={{ color: "#ccc", fontSize: 18 }}>›</span>
         </button>
       ))}
+
+      <h3 style={{ margin: "28px 0 12px", fontSize: 16, fontWeight: "500", color: "#333" }}>데이터 관리</h3>
+      <button onClick={exportData} disabled={isWorking} style={settingButtonStyle}>
+        <span style={{ fontSize: 18 }}>📤</span>
+        <span style={{ flex: 1, textAlign: "left" }}>백업 파일 내보내기</span>
+        <span style={{ color: "#ccc", fontSize: 18 }}>›</span>
+      </button>
+      <button onClick={() => fileInputRef.current?.click()} disabled={isWorking} style={settingButtonStyle}>
+        <span style={{ fontSize: 18 }}>📥</span>
+        <span style={{ flex: 1, textAlign: "left" }}>백업 파일 가져오기</span>
+        <span style={{ color: "#ccc", fontSize: 18 }}>›</span>
+      </button>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="application/json,.json"
+        onChange={importData}
+        style={{ display: "none" }}
+      />
+
+      <div style={{ marginTop: 10, padding: "12px 14px", background: "#fff7f7", borderRadius: 10, color: "#777", fontSize: 12, lineHeight: 1.55 }}>
+        백업 파일에는 거래 내역과 카테고리·자산 정보가 포함됩니다. 금융 정보가 담길 수 있으므로 안전한 위치에 보관하세요.
+      </div>
+      {dataMessage && <div style={{ marginTop: 10, color: "#3d8fe0", fontSize: 12, textAlign: "center" }}>{dataMessage}</div>}
+
+      <h3 style={{ margin: "28px 0 12px", fontSize: 16, fontWeight: "500", color: "#333" }}>개인정보 및 앱 정보</h3>
+      <button onClick={() => setSec("privacy")} style={settingButtonStyle}>
+        <span style={{ fontSize: 18 }}>🔒</span>
+        <span style={{ flex: 1, textAlign: "left" }}>개인정보처리방침</span>
+        <span style={{ color: "#ccc", fontSize: 18 }}>›</span>
+      </button>
+      <button onClick={() => setSec("storage")} style={settingButtonStyle}>
+        <span style={{ fontSize: 18 }}>📱</span>
+        <span style={{ flex: 1, textAlign: "left" }}>데이터 저장 안내</span>
+        <span style={{ color: "#ccc", fontSize: 18 }}>›</span>
+      </button>
     </div>
   );
 }
 
-function TxModal({onClose,onSave,onContinue,expCats,incCats,assets,initDate}) {
-  const [type,setType]=useState("expense");
-  const [date]=useState(initDate||new Date());
-  const [amtStr,setAmtStr]=useState("");
-  const [cat,setCat]=useState("");
-  const [asset,setAsset]=useState("");
-  const [memo,setMemo]=useState("");
-  const [showCat,setShowCat]=useState(false);
-  const cats=type==="expense"?expCats:incCats;
-  const amt=parseInt(amtStr||"0",10);
-  const ds=`${String(date.getFullYear()).slice(2)}/${String(date.getMonth()+1).padStart(2,"0")}/${String(date.getDate()).padStart(2,"0")} (${DAYS[date.getDay()]})`;
+function TxModal({ onClose, onSave, onContinue, expCats, incCats, assets, initDate, initialTx }) {
+  const isEdit = Boolean(initialTx);
+  const [type, setType] = useState(initialTx?.type || "expense");
+  const [date, setDate] = useState(() => validDate(initialTx?.date, initDate || new Date()));
+  const [amtStr, setAmtStr] = useState(initialTx?.amount ? String(initialTx.amount) : "");
+  const [cat, setCat] = useState(initialTx?.category || "");
+  const [asset, setAsset] = useState(initialTx?.asset || "");
+  const [memo, setMemo] = useState(initialTx?.memo || "");
+  const [showCat, setShowCat] = useState(false);
+  const cats = type === "expense" ? expCats : incCats;
+  const amt = parseInt(amtStr || "0", 10);
+  const accent = type === "income" ? "#3d8fe0" : type === "expense" ? "#e05555" : "#888";
 
-  const numKey=k=>{
-    if(k==="del")setAmtStr(p=>p.slice(0,-1));
-    else if(k==="00")setAmtStr(p=>p?p+"00":"");
-    else setAmtStr(p=>p+k);
+  const numKey = k => {
+    if (k === "del") setAmtStr(p => p.slice(0, -1));
+    else if (k === "00") setAmtStr(p => p ? `${p}00` : "");
+    else setAmtStr(p => `${p}${k}`);
   };
 
-  const build=()=>({id:Date.now().toString()+Math.random(),type,date:date.toISOString(),amount:amt,category:cat,asset,memo});
-  const save=()=>{if(!amt)return;onSave(build());};
-  const cont=()=>{if(!amt)return;onContinue(build());setAmtStr("");setCat("");setMemo("");};
+  const build = () => ({
+    ...(initialTx || {}),
+    id: initialTx?.id || `${Date.now()}${Math.random()}`,
+    type,
+    date: date.toISOString(),
+    amount: amt,
+    category: type === "transfer" ? "" : cat,
+    asset,
+    memo,
+  });
+  const save = () => {
+    if (!amt) return;
+    onSave(build());
+  };
+  const cont = () => {
+    if (!amt || !onContinue) return;
+    onContinue(build());
+    setAmtStr("");
+    setCat("");
+    setMemo("");
+  };
 
-  const ms={
-    overlay:{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:200,display:"flex",flexDirection:"column",justifyContent:"flex-end"},
-    sheet:{background:"#fff",borderRadius:"20px 20px 0 0",maxHeight:"92vh",overflowY:"auto"},
-    tabRow:{display:"flex",borderBottom:"1px solid #f0f0f0"},
-    tabBtn:(t)=>({flex:1,padding:"14px 0",border:"none",background:"none",cursor:"pointer",fontSize:15,fontWeight:type===t?"bold":"normal",color:type===t?(t==="income"?"#3d8fe0":t==="expense"?"#e05555":"#888"):"#ccc",borderBottom:type===t?`2px solid ${t==="income"?"#3d8fe0":t==="expense"?"#e05555":"#888"}`:"2px solid transparent"}),
-    row:{display:"flex",alignItems:"center",padding:"14px 20px",borderBottom:"1px solid #f5f5f5"},
-    lbl:{color:"#999",fontSize:14,width:44,flexShrink:0},
-    numpad:{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,padding:"10px 16px 6px"},
-    numBtn:(k)=>({padding:"13px 0",border:"none",borderRadius:10,background:k==="del"?"#f0f0f0":"#f8f8f8",fontSize:k==="del"?20:18,cursor:"pointer",fontWeight:"500",color:"#333"}),
+  const ms = {
+    overlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 200, display: "flex", flexDirection: "column", justifyContent: "flex-end" },
+    sheet: { background: "#fff", borderRadius: "20px 20px 0 0", maxHeight: "92vh", overflowY: "auto" },
+    tabRow: { display: "flex", borderBottom: "1px solid #f0f0f0" },
+    tabBtn: t => ({ flex: 1, padding: "14px 0", border: "none", background: "none", cursor: "pointer", fontSize: 15, fontWeight: type === t ? "bold" : "normal", color: type === t ? (t === "income" ? "#3d8fe0" : t === "expense" ? "#e05555" : "#888") : "#ccc", borderBottom: type === t ? `2px solid ${t === "income" ? "#3d8fe0" : t === "expense" ? "#e05555" : "#888"}` : "2px solid transparent" }),
+    row: { display: "flex", alignItems: "center", padding: "14px 20px", borderBottom: "1px solid #f5f5f5" },
+    lbl: { color: "#999", fontSize: 14, width: 44, flexShrink: 0 },
+    numpad: { display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, padding: "10px 16px 6px" },
+    numBtn: k => ({ padding: "13px 0", border: "none", borderRadius: 10, background: k === "del" ? "#f0f0f0" : "#f8f8f8", fontSize: k === "del" ? 20 : 18, cursor: "pointer", fontWeight: "500", color: "#333" }),
   };
 
   return (
-    <div style={ms.overlay} onClick={e=>e.target===e.currentTarget&&onClose()}>
+    <div style={ms.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
       <div style={ms.sheet}>
-        <div style={{display:"flex",justifyContent:"flex-end",padding:"10px 16px 0"}}><button onClick={onClose} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:"#aaa"}}>✕</button></div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px 2px" }}>
+          <strong style={{ fontSize: 16, color: "#333" }}>{isEdit ? "내역 수정" : "내역 추가"}</strong>
+          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#aaa" }}>✕</button>
+        </div>
         <div style={ms.tabRow}>
-          {["income","expense","transfer"].map(t=>(
-            <button key={t} style={ms.tabBtn(t)} onClick={()=>{setType(t);setCat("");}}>
-              {t==="income"?"수입":t==="expense"?"지출":"이체"}
+          {["income", "expense", "transfer"].map(t => (
+            <button key={t} style={ms.tabBtn(t)} onClick={() => { setType(t); setCat(""); setShowCat(false); }}>
+              {t === "income" ? "수입" : t === "expense" ? "지출" : "이체"}
             </button>
           ))}
         </div>
-        <div style={ms.row}><span style={ms.lbl}>날짜</span><span style={{fontSize:14,color:"#333"}}>{ds}</span></div>
-        <div style={ms.row}><span style={ms.lbl}>금액</span><span style={{fontSize:22,fontWeight:"bold",color:amt>0?(type==="income"?"#3d8fe0":"#e05555"):"#ccc"}}>{amt>0?fmt(amt)+"원":"0원"}</span></div>
-        {type!=="transfer"&&(
-          <div style={{...ms.row,cursor:"pointer",flexWrap:"wrap",gap:8}} onClick={()=>setShowCat(p=>!p)}>
+        <div style={ms.row}>
+          <label htmlFor="tx-date" style={ms.lbl}>날짜</label>
+          <input id="tx-date" aria-label="날짜" type="date" value={toDateInputValue(date)} onChange={e => e.target.value && setDate(fromDateInputValue(e.target.value))} style={{ border: "none", outline: "none", fontSize: 14, color: "#333", background: "transparent", fontFamily: "inherit" }} />
+        </div>
+        <div style={ms.row}><span style={ms.lbl}>금액</span><span style={{ fontSize: 22, fontWeight: "bold", color: amt > 0 ? accent : "#ccc" }}>{amt > 0 ? `${fmt(amt)}원` : "0원"}</span></div>
+        {type !== "transfer" && (
+          <div style={{ ...ms.row, cursor: "pointer", flexWrap: "wrap", gap: 8 }} onClick={() => setShowCat(p => !p)}>
             <span style={ms.lbl}>분류</span>
-            <span style={{fontSize:14,color:cat?"#333":"#ccc"}}>{cat||"카테고리 선택"}</span>
+            <span style={{ fontSize: 14, color: cat ? "#333" : "#ccc" }}>{cat || "카테고리 선택"}</span>
           </div>
         )}
-        {showCat&&type!=="transfer"&&(
-          <div style={{background:"#f9f9f9",padding:12,margin:"0 12px 8px",borderRadius:12}}>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:7}}>
-              {cats.map(c=>(
-                <button key={c.id} onClick={()=>{setCat(c.name);setShowCat(false);}} style={{background:cat===c.name?"#e05555":"#fff",color:cat===c.name?"#fff":"#333",border:`1px solid ${cat===c.name?"#e05555":"#e8e8e8"}`,borderRadius:8,padding:"8px 4px",fontSize:11,cursor:"pointer",textAlign:"center",lineHeight:1.4}}>
-                  <div style={{fontSize:16}}>{c.emoji}</div>{c.name}
+        {showCat && type !== "transfer" && (
+          <div style={{ background: "#f9f9f9", padding: 12, margin: "0 12px 8px", borderRadius: 12 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 7 }}>
+              {cats.map(c => (
+                <button key={c.id} onClick={() => { setCat(c.name); setShowCat(false); }} style={{ background: cat === c.name ? accent : "#fff", color: cat === c.name ? "#fff" : "#333", border: `1px solid ${cat === c.name ? accent : "#e8e8e8"}`, borderRadius: 8, padding: "8px 4px", fontSize: 11, cursor: "pointer", textAlign: "center", lineHeight: 1.4 }}>
+                  <div style={{ fontSize: 16 }}>{c.emoji}</div>{c.name}
                 </button>
               ))}
             </div>
           </div>
         )}
-        <div style={{...ms.row,flexWrap:"wrap",gap:8}}>
+        <div style={{ ...ms.row, flexWrap: "wrap", gap: 8 }}>
           <span style={ms.lbl}>자산</span>
-          <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-            {assets.map(a=>(
-              <button key={a.id} onClick={()=>setAsset(a.name)} style={{padding:"5px 11px",borderRadius:20,fontSize:12,cursor:"pointer",background:asset===a.name?"#e05555":"#f0f0f0",color:asset===a.name?"#fff":"#555",border:"none"}}>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {assets.map(a => (
+              <button key={a.id} onClick={() => setAsset(a.name)} style={{ padding: "5px 11px", borderRadius: 20, fontSize: 12, cursor: "pointer", background: asset === a.name ? accent : "#f0f0f0", color: asset === a.name ? "#fff" : "#555", border: "none" }}>
                 {a.emoji} {a.name}
               </button>
             ))}
@@ -342,64 +746,62 @@ function TxModal({onClose,onSave,onContinue,expCats,incCats,assets,initDate}) {
         </div>
         <div style={ms.row}>
           <span style={ms.lbl}>메모</span>
-          <input value={memo} onChange={e=>setMemo(e.target.value)} placeholder="간단한 메모" style={{border:"none",outline:"none",fontSize:14,flex:1,color:"#333",background:"transparent"}} />
+          <input value={memo} onChange={e => setMemo(e.target.value)} placeholder="간단한 메모" style={{ border: "none", outline: "none", fontSize: 14, flex: 1, color: "#333", background: "transparent" }} />
         </div>
         <div style={ms.numpad}>
-          {[["1","2","3"],["4","5","6"],["7","8","9"],["00","0","del"]].map((row,ri)=>(
-            <div key={ri} style={{display:"contents"}}>
-              {row.map(k=>(
-                <button key={k} style={ms.numBtn(k)} onClick={()=>numKey(k)}>{k==="del"?"⌫":k}</button>
-              ))}
+          {[["1", "2", "3"], ["4", "5", "6"], ["7", "8", "9"], ["00", "0", "del"]].map((row, ri) => (
+            <div key={ri} style={{ display: "contents" }}>
+              {row.map(k => <button key={k} style={ms.numBtn(k)} onClick={() => numKey(k)}>{k === "del" ? "⌫" : k}</button>)}
             </div>
           ))}
         </div>
-        <div style={{display:"flex",gap:10,padding:"6px 16px 24px"}}>
-          <button onClick={save} disabled={!amt} style={{flex:2,padding:15,background:amt?"#e05555":"#f0f0f0",color:amt?"#fff":"#bbb",border:"none",borderRadius:14,fontSize:16,fontWeight:"bold",cursor:amt?"pointer":"default"}}>저장하기</button>
-          <button onClick={cont} disabled={!amt} style={{flex:1,padding:15,background:"#f0f0f0",color:"#555",border:"none",borderRadius:14,fontSize:15,cursor:amt?"pointer":"default"}}>계속</button>
+        <div style={{ display: "flex", gap: 10, padding: "6px 16px 24px" }}>
+          <button onClick={save} disabled={!amt} style={{ flex: 2, padding: 15, background: amt ? accent : "#f0f0f0", color: amt ? "#fff" : "#bbb", border: "none", borderRadius: 14, fontSize: 16, fontWeight: "bold", cursor: amt ? "pointer" : "default" }}>{isEdit ? "수정 완료" : "저장하기"}</button>
+          {!isEdit && <button onClick={cont} disabled={!amt} style={{ flex: 1, padding: 15, background: "#f0f0f0", color: "#555", border: "none", borderRadius: 14, fontSize: 15, cursor: amt ? "pointer" : "default" }}>계속</button>}
         </div>
       </div>
     </div>
   );
 }
 
-function DayModal({day,y,m,txs,onClose,onDel,allCats,onAdd}) {
-  const totalInc=txs.filter(t=>t.type==="income").reduce((s,t)=>s+t.amount,0);
-  const totalExp=txs.filter(t=>t.type==="expense").reduce((s,t)=>s+t.amount,0);
-  const getCat=name=>allCats.find(c=>c.name===name);
+function DayModal({ day, m, txs, onClose, onDel, onEdit, allCats, onAdd }) {
+  const totalInc = txs.filter(t => t.type === "income").reduce((s, t) => s + t.amount, 0);
+  const totalExp = txs.filter(t => t.type === "expense").reduce((s, t) => s + t.amount, 0);
+  const getCat = name => allCats.find(c => c.name === name);
   return (
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:200,display:"flex",flexDirection:"column",justifyContent:"flex-end"}} onClick={e=>e.target===e.currentTarget&&onClose()}>
-      <div style={{background:"#fff",borderRadius:"20px 20px 0 0",maxHeight:"70vh",overflowY:"auto"}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"16px 18px 12px",borderBottom:"1px solid #f5f5f5"}}>
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 200, display: "flex", flexDirection: "column", justifyContent: "flex-end" }} onClick={e => e.target === e.currentTarget && onClose()}>
+      <div style={{ background: "#fff", borderRadius: "20px 20px 0 0", maxHeight: "70vh", overflowY: "auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 18px 12px", borderBottom: "1px solid #f5f5f5" }}>
           <div>
-            <span style={{fontSize:16,fontWeight:"bold",color:"#333"}}>{m+1}월 {day}일</span>
-            {(totalInc>0||totalExp>0)&&<span style={{fontSize:12,color:"#999",marginLeft:10}}>{totalExp>0&&`지출 ${fmt(totalExp)}원`} {totalInc>0&&`수입 ${fmt(totalInc)}원`}</span>}
+            <span style={{ fontSize: 16, fontWeight: "bold", color: "#333" }}>{m + 1}월 {day}일</span>
+            {(totalInc > 0 || totalExp > 0) && <span style={{ fontSize: 12, color: "#999", marginLeft: 10 }}>{totalExp > 0 && `지출 ${fmt(totalExp)}원`} {totalInc > 0 && `수입 ${fmt(totalInc)}원`}</span>}
           </div>
-          <div style={{display:"flex",gap:8}}>
-            <button onClick={onAdd} style={{background:"#e05555",color:"#fff",border:"none",borderRadius:8,padding:"6px 12px",fontSize:13,cursor:"pointer"}}>+ 추가</button>
-            <button onClick={onClose} style={{background:"none",border:"none",fontSize:20,cursor:"pointer",color:"#aaa"}}>✕</button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={onAdd} style={{ background: "#e05555", color: "#fff", border: "none", borderRadius: 8, padding: "6px 12px", fontSize: 13, cursor: "pointer" }}>+ 추가</button>
+            <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#aaa" }}>✕</button>
           </div>
         </div>
-        {txs.length===0
-          ? <div style={{textAlign:"center",color:"#ccc",padding:"30px 0",fontSize:14}}>내역이 없어요</div>
-          : txs.map(t=>{
-            const c=getCat(t.category);
+        {txs.length === 0
+          ? <div style={{ textAlign: "center", color: "#ccc", padding: "30px 0", fontSize: 14 }}>내역이 없어요</div>
+          : txs.map(t => {
+            const c = getCat(t.category);
             return (
-              <div key={t.id} style={{display:"flex",alignItems:"center",padding:"13px 18px",borderBottom:"1px solid #f8f8f8"}}>
-                <div style={{fontSize:22,marginRight:12,minWidth:30}}>{c?.emoji||"📦"}</div>
-                <div style={{flex:1}}>
-                  <div style={{fontSize:14,color:"#333",fontWeight:"500"}}>{t.category||"미분류"}</div>
-                  {t.memo&&<div style={{fontSize:12,color:"#aaa",marginTop:2}}>{t.memo}</div>}
-                  {t.asset&&<div style={{fontSize:11,color:"#bbb"}}>{t.asset}</div>}
+              <div key={t.id} onClick={() => onEdit(t)} style={{ display: "flex", alignItems: "center", padding: "13px 18px", borderBottom: "1px solid #f8f8f8", cursor: "pointer" }}>
+                <div style={{ fontSize: 22, marginRight: 12, minWidth: 30 }}>{c?.emoji || "📦"}</div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 14, color: "#333", fontWeight: "500" }}>{t.category || "미분류"}</div>
+                  {t.memo && <div style={{ fontSize: 12, color: "#aaa", marginTop: 2 }}>{t.memo}</div>}
+                  {t.asset && <div style={{ fontSize: 11, color: "#bbb" }}>{t.asset}</div>}
                 </div>
-                <div style={{fontSize:15,fontWeight:"bold",color:t.type==="income"?"#3d8fe0":"#e05555",marginRight:12}}>
-                  {t.type==="income"?"+":"-"}{fmt(t.amount)}원
+                <div style={{ fontSize: 15, fontWeight: "bold", color: t.type === "income" ? "#3d8fe0" : "#e05555", marginRight: 8 }}>
+                  {t.type === "income" ? "+" : "-"}{fmt(t.amount)}원
                 </div>
-                <button onClick={()=>onDel(t.id)} style={{background:"none",border:"none",color:"#ddd",cursor:"pointer",fontSize:18,padding:4}}>🗑</button>
+                <button aria-label="수정" onClick={e => { e.stopPropagation(); onEdit(t); }} style={{ background: "#fff6f6", border: "1px solid #f5caca", color: "#e05555", cursor: "pointer", fontSize: 12, fontWeight: "bold", borderRadius: 7, padding: "6px 8px", marginRight: 4 }}>수정</button>
+                <button aria-label="삭제" onClick={e => { e.stopPropagation(); onDel(t.id); }} style={{ background: "none", border: "none", color: "#bbb", cursor: "pointer", fontSize: 18, padding: 4 }}>🗑</button>
               </div>
             );
-          })
-        }
-        <div style={{height:20}} />
+          })}
+        <div style={{ height: 20 }} />
       </div>
     </div>
   );
